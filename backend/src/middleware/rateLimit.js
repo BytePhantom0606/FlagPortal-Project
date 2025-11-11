@@ -16,7 +16,7 @@
  * Storage: Built-in memory store (express-rate-limit default)
  */
 
-import rateLimit from 'express-rate-limit';
+import { rateLimit } from 'express-rate-limit';
 import { PrismaClient } from '@prisma/client';
 import { logSecurity } from '../utils/logger.js';
 

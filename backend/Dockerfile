@@ -10,12 +10,12 @@ RUN apk add --no-cache curl openssl
 # Stage 2: Dependencies
 FROM base AS dependencies
 COPY package*.json ./
-RUN npm ci --only=production && npm cache clean --force
+RUN npm install --only=production && npm cache clean --force
 
 # Stage 3: Build (for Prisma generation)
 FROM base AS build
 COPY package*.json ./
-RUN npm ci
+RUN npm install
 COPY . .
 RUN npx prisma generate
 

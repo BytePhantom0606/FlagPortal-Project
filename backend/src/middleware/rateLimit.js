@@ -13,28 +13,20 @@
  * - Prevents credential stuffing on login
  * - Prevents API abuse and DoS
  *
- * Storage: In-memory (memorystore) with Redis fallback
+ * Storage: Built-in memory store (express-rate-limit default)
  */
 
 import rateLimit from 'express-rate-limit';
-import MemoryStore from 'memorystore';
 import { PrismaClient } from '@prisma/client';
 import { logSecurity } from '../utils/logger.js';
 
 const prisma = new PrismaClient();
-const MemoryStoreInstance = MemoryStore(rateLimit);
-
-// Create memory store for rate limiting
-const store = new MemoryStoreInstance({
-  checkPeriod: 86400000, // 24 hours
-});
 
 /**
  * Global API rate limiter
  * Prevents abuse of any endpoint
  */
 export const globalRateLimiter = rateLimit({
-  store,
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60000, // 1 minute
   max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
   message: {
@@ -66,7 +58,6 @@ export const globalRateLimiter = rateLimit({
  * Stricter limits for login/register endpoints
  */
 export const authRateLimiter = rateLimit({
-  store,
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5, // 5 attempts per 15 minutes
   message: {

@@ -1,0 +1,434 @@
+// ============================================
+// FlagForge CTF Platform - Prisma Schema
+// ============================================
+// Database: MySQL 8.0
+// ORM: Prisma (type-safe, modern, powerful)
+// ============================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// User Management
+// ============================================
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  email     String   @unique
+  password  String   // bcrypt hashed
+  role      UserRole @default(USER)
+
+  // Profile
+  country   String?
+  bio       String?  @db.Text
+  avatar    String?  // URL or path
+
+  // Security
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret  String?
+  lastLogin        DateTime?
+  ipAddress        String?
+
+  // Account status
+  isActive         Boolean  @default(true)
+  isVerified       Boolean  @default(false)
+  verificationToken String?
+  resetToken        String?
+  resetTokenExpiry  DateTime?
+  forcePasswordChange Boolean @default(false)
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  submissions  Submission[]
+  auditLogs    AuditLog[]
+
+  @@index([email])
+  @@index([username])
+  @@map("users")
+}
+
+// ============================================
+// CTF Competition Management
+// ============================================
+
+enum CTFStatus {
+  DRAFT
+  UPCOMING
+  ACTIVE
+  ENDED
+}
+
+model CTF {
+  id          String     @id @default(uuid())
+  name        String
+  description String     @db.Text
+  status      CTFStatus  @default(DRAFT)
+
+  // Timing
+  startTime   DateTime
+  endTime     DateTime
+
+  // Configuration
+  isPublic    Boolean    @default(true)
+  maxTeamSize Int        @default(1)
+
+  // Timestamps
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relations
+  challenges  Challenge[]
+
+  @@index([status])
+  @@index([startTime, endTime])
+  @@map("ctfs")
+}
+
+// ============================================
+// Challenge Management
+// ============================================
+
+enum ChallengeCategory {
+  WEB
+  PWN
+  CRYPTO
+  REVERSE
+  FORENSICS
+  MISC
+  OSINT
+  HARDWARE
+}
+
+enum ChallengeDifficulty {
+  EASY
+  MEDIUM
+  HARD
+  INSANE
+}
+
+model Challenge {
+  id          String              @id @default(uuid())
+  ctfId       String
+  ctf         CTF                 @relation(fields: [ctfId], references: [id], onDelete: Cascade)
+
+  // Basic info
+  title       String
+  description String              @db.Text
+  category    ChallengeCategory
+  difficulty  ChallengeDifficulty
+  points      Int
+
+  // Challenge details
+  author      String?
+  connection  String?             // e.g., "nc 1.2.3.4 1337"
+
+  // State
+  isVisible   Boolean             @default(true)
+  isSolved    Boolean             @default(false)
+  solveCount  Int                 @default(0)
+
+  // Dynamic scoring (optional)
+  isDynamic   Boolean             @default(false)
+  minPoints   Int?
+  maxPoints   Int?
+
+  // Timestamps
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  // Relations
+  flags       Flag[]
+  submissions Submission[]
+  attachments Attachment[]
+  hints       Hint[]
+
+  @@index([ctfId])
+  @@index([category])
+  @@index([isVisible])
+  @@map("challenges")
+}
+
+// ============================================
+// Flag Management (Core Security)
+// ============================================
+// Security: Flags are NEVER stored in plaintext
+// We use scrypt with per-flag salt for hashing
+// Supports: static, per-user dynamic, and regex flags
+
+enum FlagType {
+  STATIC      // Same flag for all users (hashed)
+  DYNAMIC     // Generated per user (template + user_id)
+  REGEX       // Pattern matching
+}
+
+model Flag {
+  id          String    @id @default(uuid())
+  challengeId String
+  challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+
+  // Flag data (SECURITY CRITICAL)
+  // For STATIC: hash of the flag (scrypt + salt)
+  // For DYNAMIC: template with {user_id}, {username} placeholders, then hashed
+  // For REGEX: the regex pattern (NOT hashed, used for matching)
+  flagHash    String    @db.Text // scrypt hash for STATIC/DYNAMIC, regex for REGEX
+  salt        String    @db.Text // Random salt (per flag) for scrypt
+
+  // Flag type and config
+  type        FlagType  @default(STATIC)
+
+  // Case sensitivity for comparison
+  caseSensitive Boolean @default(true)
+
+  // Timestamps
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  submissions Submission[]
+
+  @@index([challengeId])
+  @@map("flags")
+}
+
+// ============================================
+// Submission & Scoring
+// ============================================
+
+enum SubmissionStatus {
+  CORRECT
+  INCORRECT
+  INVALID
+  RATE_LIMITED
+}
+
+model Submission {
+  id          String           @id @default(uuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  challengeId String
+  challenge   Challenge        @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  flagId      String?
+  flag        Flag?            @relation(fields: [flagId], references: [id], onDelete: SetNull)
+
+  // Submission details
+  // SECURITY: Never log the actual flag attempt in production
+  // Only store hash for audit purposes
+  attemptHash String?          @db.Text
+  status      SubmissionStatus
+
+  // First blood tracking
+  isFirstBlood Boolean         @default(false)
+  pointsAwarded Int            @default(0)
+
+  // Metadata
+  ipAddress   String?
+  userAgent   String?          @db.Text
+
+  // Timestamps
+  submittedAt DateTime         @default(now())
+
+  @@index([userId])
+  @@index([challengeId])
+  @@index([status])
+  @@index([submittedAt])
+  @@map("submissions")
+}
+
+// ============================================
+// Challenge Attachments
+// ============================================
+
+model Attachment {
+  id          String    @id @default(uuid())
+  challengeId String
+  challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+
+  // File details
+  filename    String
+  originalName String
+  filepath    String
+  filesize    Int       // bytes
+  mimetype    String
+
+  // Security: SHA-256 hash for integrity verification
+  sha256Hash  String
+
+  // Metadata
+  isPublic    Boolean   @default(true)
+  downloadCount Int     @default(0)
+
+  // Timestamps
+  uploadedAt  DateTime  @default(now())
+
+  @@index([challengeId])
+  @@map("attachments")
+}
+
+// ============================================
+// Hints System
+// ============================================
+
+model Hint {
+  id          String    @id @default(uuid())
+  challengeId String
+  challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+
+  // Hint content
+  content     String    @db.Text
+  cost        Int       @default(0) // Points deducted when hint is revealed
+
+  // Ordering
+  order       Int       @default(0)
+
+  // Timestamps
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([challengeId])
+  @@map("hints")
+}
+
+// ============================================
+// Rate Limiting (Database-backed)
+// ============================================
+
+model RateLimit {
+  id          String   @id @default(uuid())
+  identifier  String   // user_id or IP address
+  action      String   // e.g., "flag_submit", "login"
+  attempts    Int      @default(0)
+  windowStart DateTime @default(now())
+
+  @@unique([identifier, action])
+  @@index([windowStart])
+  @@map("rate_limits")
+}
+
+// ============================================
+// Audit Log (Security & Compliance)
+// ============================================
+
+enum AuditAction {
+  // Auth actions
+  LOGIN
+  LOGOUT
+  REGISTER
+  PASSWORD_CHANGE
+  PASSWORD_RESET
+  TWO_FACTOR_ENABLE
+  TWO_FACTOR_DISABLE
+
+  // Challenge actions
+  CHALLENGE_CREATE
+  CHALLENGE_UPDATE
+  CHALLENGE_DELETE
+  CHALLENGE_VIEW
+
+  // Flag actions
+  FLAG_SUBMIT_SUCCESS
+  FLAG_SUBMIT_FAIL
+  FIRST_BLOOD
+
+  // Admin actions
+  USER_CREATE
+  USER_UPDATE
+  USER_DELETE
+  USER_BAN
+  USER_UNBAN
+  CTF_CREATE
+  CTF_UPDATE
+  CTF_DELETE
+  MAINTENANCE_TOGGLE
+
+  // File actions
+  FILE_UPLOAD
+  FILE_DELETE
+}
+
+model AuditLog {
+  id          String      @id @default(uuid())
+  userId      String?
+  user        User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // Action details
+  action      AuditAction
+  resource    String?     // e.g., "challenge:uuid" or "user:uuid"
+  description String      @db.Text
+
+  // Metadata
+  ipAddress   String?
+  userAgent   String?     @db.Text
+  metadata    String?     @db.Text // JSON for additional data
+
+  // Timestamps
+  createdAt   DateTime    @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================
+// Announcements System
+// ============================================
+
+enum AnnouncementType {
+  INFO
+  WARNING
+  SUCCESS
+  ERROR
+}
+
+model Announcement {
+  id          String            @id @default(uuid())
+
+  // Content
+  title       String
+  content     String            @db.Text // Supports markdown
+  type        AnnouncementType  @default(INFO)
+
+  // Visibility
+  isActive    Boolean           @default(true)
+  isPinned    Boolean           @default(false)
+
+  // Timestamps
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  expiresAt   DateTime?
+
+  @@index([isActive, isPinned])
+  @@index([createdAt])
+  @@map("announcements")
+}
+
+// ============================================
+// System Configuration
+// ============================================
+
+model SystemConfig {
+  id                String   @id @default(uuid())
+  key               String   @unique
+  value             String   @db.Text
+  description       String?  @db.Text
+
+  // Timestamps
+  updatedAt         DateTime @updatedAt
+
+  @@map("system_config")
+}
